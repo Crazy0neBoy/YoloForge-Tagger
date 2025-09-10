@@ -46,8 +46,9 @@ class ImageLabeler:
         # Создание интерфейса
         self.create_widgets()
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
-        self.root.bind("<Left>", lambda e: self.prev_image())
-        self.root.bind("<Right>", lambda e: self.next_image())
+        # Глобальные горячие клавиши для переключения изображений
+        self.root.bind_all("<Left>", lambda e: self.prev_image())
+        self.root.bind_all("<Right>", lambda e: self.next_image())
 
         # Загрузка первого изображения
         if self.image_files:
@@ -286,11 +287,13 @@ class ImageLabeler:
     def delete_box(self, event):
         """Удаление прямоугольника правой кнопкой мыши"""
         x, y = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
-        items = self.canvas.find_overlapping(x, y, x, y)
-        for item in items:
-            tags = self.canvas.gettags(item)
-            if "rectangle" in tags:
-                idx = int(tags[1].split("_")[1])
+        # Конвертируем координаты в систему изображения,
+        # чтобы не зависеть от масштабирования и смещения
+        ix, iy = self.canvas_to_image(x, y)
+        # Ищем аннотацию, содержащую точку
+        for idx in range(len(self.annotations) - 1, -1, -1):
+            ann = self.annotations[idx]
+            if ann['x1'] <= ix <= ann['x2'] and ann['y1'] <= iy <= ann['y2']:
                 del self.annotations[idx]
                 self.redraw_annotations()
                 self.update_stats()
