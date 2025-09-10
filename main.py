@@ -42,6 +42,7 @@ class ImageLabeler:
 
         # Создание интерфейса
         self.create_widgets()
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         # Загрузка первого изображения
         if self.image_files:
@@ -56,7 +57,7 @@ class ImageLabeler:
 
     def create_widgets(self):
         """Создает элементы интерфейса"""
-        # Левый фрейм для классов
+        # Левый фрейм для классов и подсказок
         self.left_frame = tk.Frame(self.root, width=200)
         self.left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
 
@@ -66,6 +67,20 @@ class ImageLabeler:
         self.class_listbox = tk.Listbox(self.left_frame, listvariable=self.classes_var, height=10)
         self.class_listbox.pack(fill=tk.X, pady=5)
         self.class_listbox.bind('<<ListboxSelect>>', self.on_class_select)
+
+        # Подсказка по использованию программы
+        tk.Label(
+            self.left_frame,
+            text=(
+                "ЛКМ - рисовать/перемещать\n"
+                "ПКМ - удалить рамку\n"
+                "Колесо - след. изображение\n"
+                "Аннотации сохраняются\n"
+                "автоматически"
+            ),
+            justify=tk.LEFT,
+            wraplength=180,
+        ).pack(pady=10)
 
         # Центральный фрейм для изображения
         self.center_frame = tk.Frame(self.root)
@@ -80,6 +95,9 @@ class ImageLabeler:
         self.canvas.bind("<B1-Motion>", self.draw_or_resize_or_drag)
         self.canvas.bind("<ButtonRelease-1>", self.end_action)
         self.canvas.bind("<MouseWheel>", self.scroll_image)  # Прокрутка колесиком мыши
+        self.canvas.bind("<Button-3>", self.delete_box)
+        self.canvas.bind("<Motion>", self.draw_crosshair)
+        self.canvas.bind("<Leave>", lambda e: self.canvas.delete("crosshair"))
 
         # Правый фрейм для статистики
         self.right_frame = tk.Frame(self.root, width=200)
@@ -95,7 +113,6 @@ class ImageLabeler:
         self.image_counter = tk.Label(self.nav_frame, text="")
         self.image_counter.pack(side=tk.LEFT, padx=5)
         tk.Button(self.nav_frame, text="Следующее", command=self.next_image).pack(side=tk.LEFT, padx=5)
-        tk.Button(self.nav_frame, text="Сохранить разметку", command=self.save_annotations).pack(side=tk.LEFT, padx=5)
 
         # Обновление статистики и счетчика
         self.update_stats()
@@ -226,6 +243,25 @@ class ImageLabeler:
         self.selected_rect = None
         self.resize_corner = None
 
+    def delete_box(self, event):
+        """Удаление прямоугольника правой кнопкой мыши"""
+        x, y = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
+        for i, ann in enumerate(self.annotations):
+            if ann['x1'] <= x <= ann['x2'] and ann['y1'] <= y <= ann['y2']:
+                del self.annotations[i]
+                self.redraw_annotations()
+                self.update_stats()
+                return
+
+    def draw_crosshair(self, event):
+        """Отрисовка вспомогательных линий под курсором"""
+        self.canvas.delete("crosshair")
+        x, y = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
+        w = self.canvas.winfo_width()
+        h = self.canvas.winfo_height()
+        self.canvas.create_line(0, y, w, y, fill="blue", dash=(2, 2), tags="crosshair")
+        self.canvas.create_line(x, 0, x, h, fill="blue", dash=(2, 2), tags="crosshair")
+
     def on_class_select(self, event):
         """Обработка выбора класса из списка"""
         selection = self.class_listbox.curselection()
@@ -235,25 +271,29 @@ class ImageLabeler:
     def scroll_image(self, event):
         """Прокрутка изображений колесиком мыши"""
         if event.delta > 0 and self.current_image_index > 0:
+            self.save_annotations()
             self.current_image_index -= 1
             self.load_image(self.image_files[self.current_image_index])
         elif event.delta < 0 and self.current_image_index < len(self.image_files) - 1:
+            self.save_annotations()
             self.current_image_index += 1
             self.load_image(self.image_files[self.current_image_index])
 
     def prev_image(self):
         """Переключение на предыдущее изображение"""
         if self.current_image_index > 0:
+            self.save_annotations()
             self.current_image_index -= 1
             self.load_image(self.image_files[self.current_image_index])
 
     def next_image(self):
         """Переключение на следующее изображение"""
         if self.current_image_index < len(self.image_files) - 1:
+            self.save_annotations()
             self.current_image_index += 1
             self.load_image(self.image_files[self.current_image_index])
 
-    def save_annotations(self):
+    def save_annotations(self, show_message=False):
         """Сохранение аннотаций в файл .txt в формате YOLO"""
         if self.image_files:
             annotation_file = self.image_path / f"{self.image_files[self.current_image_index].stem}.txt"
@@ -270,7 +310,8 @@ class ImageLabeler:
                     width = (x2 - x1) / self.image_width
                     height = (y2 - y1) / self.image_height
                     f.write(f"{class_id} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}\n")
-            messagebox.showinfo("Успех", "Аннотации сохранены")
+            if show_message:
+                messagebox.showinfo("Успех", "Аннотации сохранены")
             self.update_stats()
 
     def update_image_counter(self):
@@ -310,6 +351,11 @@ class ImageLabeler:
             stats_text += f"  {cls}: {count}\n"
 
         self.stats_label.config(text=stats_text)
+
+    def on_close(self):
+        """Сохранение данных при закрытии окна"""
+        self.save_annotations()
+        self.root.destroy()
 
 
 if __name__ == "__main__":
