@@ -1,7 +1,6 @@
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, filedialog
 from PIL import Image, ImageTk
-import os
 from pathlib import Path
 from collections import Counter
 
@@ -12,8 +11,9 @@ class ImageLabeler:
         self.root.title("Программа для разметки изображений")
         self.root.geometry("1400x700")  # Увеличил ширину окна для статистики
 
-        # Путь к папке с задачей
-        self.task_path = Path("Tasks/job_1")
+        # Выбор папки с задачей
+        selected_path = filedialog.askdirectory(title="Выберите папку задачи", initialdir="Tasks")
+        self.task_path = Path(selected_path) if selected_path else Path("Tasks/job_1")
         self.image_path = self.task_path / "images"
         self.classes_file = self.task_path / "classes.txt"
 
@@ -28,6 +28,8 @@ class ImageLabeler:
         self.image_tk = None
         self.image_width = 0
         self.image_height = 0
+        self.scale_x = 1
+        self.scale_y = 1
 
         # Переменные для разметки
         self.start_x = None
@@ -36,8 +38,6 @@ class ImageLabeler:
         self.annotations = []
         self.selected_rect = None
         self.resize_handle = None
-        self.drag_start_x = None
-        self.drag_start_y = None
         self.resize_corner = None
 
         # Создание интерфейса
@@ -62,9 +62,8 @@ class ImageLabeler:
 
         # Список классов
         tk.Label(self.left_frame, text="Классы:").pack(anchor=tk.W)
-        self.class_listbox = tk.Listbox(self.left_frame, listvariable=self.current_class, height=10)
-        for cls in self.classes:
-            self.class_listbox.insert(tk.END, cls)
+        self.classes_var = tk.StringVar(value=self.classes)
+        self.class_listbox = tk.Listbox(self.left_frame, listvariable=self.classes_var, height=10)
         self.class_listbox.pack(fill=tk.X, pady=5)
         self.class_listbox.bind('<<ListboxSelect>>', self.on_class_select)
 
@@ -104,11 +103,13 @@ class ImageLabeler:
 
     def load_image(self, image_path):
         """Загружает изображение на холст"""
+        self.canvas.delete("all")
         self.current_image = Image.open(image_path)
         self.image_width, self.image_height = self.current_image.size
-        # Масштабирование изображения для отображения
-        self.current_image = self.current_image.resize((800, 600), Image.Resampling.LANCZOS)
-        self.image_tk = ImageTk.PhotoImage(self.current_image)
+        self.scale_x = 800 / self.image_width
+        self.scale_y = 600 / self.image_height
+        display_image = self.current_image.resize((int(self.image_width * self.scale_x), int(self.image_height * self.scale_y)), Image.Resampling.LANCZOS)
+        self.image_tk = ImageTk.PhotoImage(display_image)
         self.canvas.create_image(0, 0, image=self.image_tk, anchor=tk.NW, tags="image")
 
         # Загрузка аннотаций, если они есть
@@ -122,10 +123,10 @@ class ImageLabeler:
                         class_id = int(parts[0])
                         x_center, y_center, width, height = map(float, parts[1:])
                         # Конвертация из нормализованных координат YOLO в пиксельные
-                        x1 = (x_center - width / 2) * 800
-                        y1 = (y_center - height / 2) * 600
-                        x2 = (x_center + width / 2) * 800
-                        y2 = (y_center + height / 2) * 600
+                        x1 = (x_center - width / 2) * self.image_width * self.scale_x
+                        y1 = (y_center - height / 2) * self.image_height * self.scale_y
+                        x2 = (x_center + width / 2) * self.image_width * self.scale_x
+                        y2 = (y_center + height / 2) * self.image_height * self.scale_y
                         self.annotations.append({
                             'class': self.classes[class_id] if class_id < len(self.classes) else "unknown",
                             'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2
@@ -195,8 +196,11 @@ class ImageLabeler:
                 self.redraw_annotations()
             else:  # Перетаскивание
                 dx, dy = x - self.start_x, y - self.start_y
+                width = ann['x2'] - ann['x1']
+                height = ann['y2'] - ann['y1']
                 ann['x1'], ann['y1'] = dx, dy
-                ann['x2'], ann['y2'] = dx + (ann['x2'] - ann['x1']), dy + (ann['y2'] - ann['y1'])
+                ann['x2'] = ann['x1'] + width
+                ann['y2'] = ann['y1'] + height
                 self.redraw_annotations()
 
     def end_action(self, event):
@@ -226,7 +230,7 @@ class ImageLabeler:
         """Обработка выбора класса из списка"""
         selection = self.class_listbox.curselection()
         if selection:
-            self.current_class.set(self.classes[selection[0]])
+            self.current_class.set(self.class_listbox.get(selection[0]))
 
     def scroll_image(self, event):
         """Прокрутка изображений колесиком мыши"""
@@ -257,10 +261,14 @@ class ImageLabeler:
                 for ann in self.annotations:
                     class_id = self.classes.index(ann['class']) if ann['class'] in self.classes else 0
                     # Конвертация в нормализованные координаты YOLO
-                    x_center = (ann['x1'] + ann['x2']) / 2 / 800
-                    y_center = (ann['y1'] + ann['y2']) / 2 / 600
-                    width = (ann['x2'] - ann['x1']) / 800
-                    height = (ann['y2'] - ann['y1']) / 600
+                    x1 = ann['x1'] / self.scale_x
+                    y1 = ann['y1'] / self.scale_y
+                    x2 = ann['x2'] / self.scale_x
+                    y2 = ann['y2'] / self.scale_y
+                    x_center = (x1 + x2) / 2 / self.image_width
+                    y_center = (y1 + y2) / 2 / self.image_height
+                    width = (x2 - x1) / self.image_width
+                    height = (y2 - y1) / self.image_height
                     f.write(f"{class_id} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}\n")
             messagebox.showinfo("Успех", "Аннотации сохранены")
             self.update_stats()
