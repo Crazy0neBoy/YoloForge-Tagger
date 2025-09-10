@@ -3,6 +3,7 @@ from tkinter import messagebox, filedialog
 from PIL import Image, ImageTk
 from pathlib import Path
 from collections import Counter
+import hashlib
 
 
 class ImageLabeler:
@@ -20,6 +21,7 @@ class ImageLabeler:
         # Загрузка классов
         self.classes = self.load_classes()
         self.current_class = tk.StringVar(value=self.classes[0] if self.classes else "")
+        self.class_colors = {cls: self.generate_color(cls) for cls in self.classes}
 
         # Загрузка списка изображений
         self.image_files = [f for f in self.image_path.glob("*.jpg") if f.is_file()]
@@ -28,8 +30,9 @@ class ImageLabeler:
         self.image_tk = None
         self.image_width = 0
         self.image_height = 0
-        self.scale_x = 1
-        self.scale_y = 1
+        self.scale = 1
+        self.offset_x = 0
+        self.offset_y = 0
 
         # Переменные для разметки
         self.start_x = None
@@ -43,6 +46,8 @@ class ImageLabeler:
         # Создание интерфейса
         self.create_widgets()
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.root.bind("<Left>", lambda e: self.prev_image())
+        self.root.bind("<Right>", lambda e: self.next_image())
 
         # Загрузка первого изображения
         if self.image_files:
@@ -54,6 +59,14 @@ class ImageLabeler:
             with open(self.classes_file, 'r') as f:
                 return [line.strip() for line in f if line.strip()]
         return []
+
+    def generate_color(self, name):
+        """Генерирует детерминированный цвет для класса"""
+        h = hashlib.md5(name.encode()).hexdigest()
+        r = int(h[0:2], 16)
+        g = int(h[2:4], 16)
+        b = int(h[4:6], 16)
+        return f"#{r:02x}{g:02x}{b:02x}"
 
     def create_widgets(self):
         """Создает элементы интерфейса"""
@@ -89,6 +102,7 @@ class ImageLabeler:
         # Холст для изображения
         self.canvas = tk.Canvas(self.center_frame, bg="gray")
         self.canvas.pack(expand=True, fill=tk.BOTH)
+        self.canvas.bind("<Configure>", self.on_canvas_resize)
 
         # Привязка событий мыши
         self.canvas.bind("<Button-1>", self.start_action)
@@ -120,14 +134,9 @@ class ImageLabeler:
 
     def load_image(self, image_path):
         """Загружает изображение на холст"""
-        self.canvas.delete("all")
         self.current_image = Image.open(image_path)
         self.image_width, self.image_height = self.current_image.size
-        self.scale_x = 800 / self.image_width
-        self.scale_y = 600 / self.image_height
-        display_image = self.current_image.resize((int(self.image_width * self.scale_x), int(self.image_height * self.scale_y)), Image.Resampling.LANCZOS)
-        self.image_tk = ImageTk.PhotoImage(display_image)
-        self.canvas.create_image(0, 0, image=self.image_tk, anchor=tk.NW, tags="image")
+        self.display_image()
 
         # Загрузка аннотаций, если они есть
         annotation_file = self.image_path / f"{image_path.stem}.txt"
@@ -139,11 +148,10 @@ class ImageLabeler:
                     if len(parts) == 5:
                         class_id = int(parts[0])
                         x_center, y_center, width, height = map(float, parts[1:])
-                        # Конвертация из нормализованных координат YOLO в пиксельные
-                        x1 = (x_center - width / 2) * self.image_width * self.scale_x
-                        y1 = (y_center - height / 2) * self.image_height * self.scale_y
-                        x2 = (x_center + width / 2) * self.image_width * self.scale_x
-                        y2 = (y_center + height / 2) * self.image_height * self.scale_y
+                        x1 = (x_center - width / 2) * self.image_width
+                        y1 = (y_center - height / 2) * self.image_height
+                        x2 = (x_center + width / 2) * self.image_width
+                        y2 = (y_center + height / 2) * self.image_height
                         self.annotations.append({
                             'class': self.classes[class_id] if class_id < len(self.classes) else "unknown",
                             'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2
@@ -152,30 +160,60 @@ class ImageLabeler:
         self.update_image_counter()
         self.update_stats()
 
+    def display_image(self):
+        """Отображает текущее изображение с учетом размеров холста"""
+        self.canvas.delete("all")
+        self.root.update_idletasks()
+        canvas_w = self.canvas.winfo_width()
+        canvas_h = self.canvas.winfo_height()
+        if canvas_w <= 1 or canvas_h <= 1:
+            return
+        scale = min(canvas_w / self.image_width, canvas_h / self.image_height)
+        self.scale = scale
+        new_w = int(self.image_width * scale)
+        new_h = int(self.image_height * scale)
+        self.offset_x = (canvas_w - new_w) / 2
+        self.offset_y = (canvas_h - new_h) / 2
+        display_image = self.current_image.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        self.image_tk = ImageTk.PhotoImage(display_image)
+        self.canvas.create_image(self.offset_x, self.offset_y, image=self.image_tk, anchor=tk.NW, tags="image")
+
+    def image_to_canvas(self, x, y):
+        return x * self.scale + self.offset_x, y * self.scale + self.offset_y
+
+    def canvas_to_image(self, x, y):
+        return (x - self.offset_x) / self.scale, (y - self.offset_y) / self.scale
+
+    def on_canvas_resize(self, event):
+        if self.current_image:
+            self.display_image()
+            self.redraw_annotations()
+
     def redraw_annotations(self):
         """Перерисовывает все аннотации на холсте"""
         self.canvas.delete("rectangle", "handle", "text")
         for i, ann in enumerate(self.annotations):
-            rect_id = self.canvas.create_rectangle(
-                ann['x1'], ann['y1'], ann['x2'], ann['y2'],
-                outline="red", width=2, tags=("rectangle", f"rect_{i}")
-            )
-            # Добавление маркеров для изменения размера
+            x1, y1 = self.image_to_canvas(ann['x1'], ann['y1'])
+            x2, y2 = self.image_to_canvas(ann['x2'], ann['y2'])
+            color = self.class_colors.get(ann['class'], "red")
             self.canvas.create_rectangle(
-                ann['x2'] - 5, ann['y2'] - 5, ann['x2'] + 5, ann['y2'] + 5,
+                x1, y1, x2, y2,
+                outline=color, width=2, tags=("rectangle", f"rect_{i}")
+            )
+            self.canvas.create_rectangle(
+                x2 - 5, y2 - 5, x2 + 5, y2 + 5,
                 fill="blue", tags=("handle", f"handle_{i}_br")
             )
             self.canvas.create_text(
-                ann['x1'], ann['y1'] - 10,
-                text=ann['class'], fill="red", anchor=tk.SW, tags="text"
+                x1, y1 - 10,
+                text=ann['class'], fill=color, anchor=tk.SW, tags="text"
             )
 
     def start_action(self, event):
         """Начало действия: рисование, выбор или перетаскивание"""
         x, y = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
 
-        # Проверка, попал ли клик на маркер изменения размера
-        items = self.canvas.find_overlapping(x - 5, y - 5, x + 5, y + 5)
+        items = self.canvas.find_overlapping(x, y, x, y)
         for item in items:
             tags = self.canvas.gettags(item)
             if "handle" in tags:
@@ -183,20 +221,21 @@ class ImageLabeler:
                 self.resize_corner = tags[1].split("_")[2]
                 self.start_x, self.start_y = x, y
                 return
-
-        # Проверка, попал ли клик на прямоугольник для перетаскивания
-        for i, ann in enumerate(self.annotations):
-            if (ann['x1'] <= x <= ann['x2'] and ann['y1'] <= y <= ann['y2']):
-                self.selected_rect = i
-                self.start_x, self.start_y = x - ann['x1'], y - ann['y1']
+            if "rectangle" in tags:
+                self.selected_rect = int(tags[1].split("_")[1])
+                x1, y1 = self.image_to_canvas(self.annotations[self.selected_rect]['x1'], self.annotations[self.selected_rect]['y1'])
+                self.start_x, self.start_y = x - x1, y - y1
                 self.resize_corner = None
                 return
 
-        # Начало рисования нового прямоугольника
+        if not (self.offset_x <= x <= self.offset_x + self.image_width * self.scale and self.offset_y <= y <= self.offset_y + self.image_height * self.scale):
+            return
+
         self.selected_rect = None
         self.start_x, self.start_y = x, y
+        color = self.class_colors.get(self.current_class.get(), "red")
         self.current_rect = self.canvas.create_rectangle(
-            x, y, x, y, outline="red", width=2, tags="rectangle"
+            x, y, x, y, outline=color, width=2, tags="rectangle"
         )
 
     def draw_or_resize_or_drag(self, event):
@@ -209,33 +248,34 @@ class ImageLabeler:
             ann = self.annotations[self.selected_rect]
             if self.resize_corner:  # Изменение размера
                 if self.resize_corner == "br":
-                    ann['x2'], ann['y2'] = x, y
+                    ix, iy = self.canvas_to_image(x, y)
+                    ann['x2'], ann['y2'] = ix, iy
                 self.redraw_annotations()
             else:  # Перетаскивание
-                dx, dy = x - self.start_x, y - self.start_y
+                new_x1 = x - self.start_x
+                new_y1 = y - self.start_y
+                ix1, iy1 = self.canvas_to_image(new_x1, new_y1)
                 width = ann['x2'] - ann['x1']
                 height = ann['y2'] - ann['y1']
-                ann['x1'], ann['y1'] = dx, dy
-                ann['x2'] = ann['x1'] + width
-                ann['y2'] = ann['y1'] + height
+                ann['x1'], ann['y1'] = ix1, iy1
+                ann['x2'] = ix1 + width
+                ann['y2'] = iy1 + height
                 self.redraw_annotations()
 
     def end_action(self, event):
         """Завершение действия"""
         if self.current_rect:
             x, y = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
-            if abs(x - self.start_x) > 5 and abs(y - self.start_y) > 5:  # Минимальный размер прямоугольника
+            if abs(x - self.start_x) > 5 and abs(y - self.start_y) > 5:
+                x1, y1 = self.canvas_to_image(self.start_x, self.start_y)
+                x2, y2 = self.canvas_to_image(x, y)
                 self.annotations.append({
                     'class': self.current_class.get(),
-                    'x1': min(self.start_x, x),
-                    'y1': min(self.start_y, y),
-                    'x2': max(self.start_x, x),
-                    'y2': max(self.start_y, y)
+                    'x1': min(x1, x2),
+                    'y1': min(y1, y2),
+                    'x2': max(x1, x2),
+                    'y2': max(y1, y2)
                 })
-                self.canvas.create_text(
-                    min(self.start_x, x), min(self.start_y, y) - 10,
-                    text=self.current_class.get(), fill="red", anchor=tk.SW, tags="text"
-                )
                 self.redraw_annotations()
                 self.update_stats()
             self.canvas.delete(self.current_rect)
@@ -246,9 +286,12 @@ class ImageLabeler:
     def delete_box(self, event):
         """Удаление прямоугольника правой кнопкой мыши"""
         x, y = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
-        for i, ann in enumerate(self.annotations):
-            if ann['x1'] <= x <= ann['x2'] and ann['y1'] <= y <= ann['y2']:
-                del self.annotations[i]
+        items = self.canvas.find_overlapping(x, y, x, y)
+        for item in items:
+            tags = self.canvas.gettags(item)
+            if "rectangle" in tags:
+                idx = int(tags[1].split("_")[1])
+                del self.annotations[idx]
                 self.redraw_annotations()
                 self.update_stats()
                 return
@@ -300,15 +343,10 @@ class ImageLabeler:
             with open(annotation_file, 'w') as f:
                 for ann in self.annotations:
                     class_id = self.classes.index(ann['class']) if ann['class'] in self.classes else 0
-                    # Конвертация в нормализованные координаты YOLO
-                    x1 = ann['x1'] / self.scale_x
-                    y1 = ann['y1'] / self.scale_y
-                    x2 = ann['x2'] / self.scale_x
-                    y2 = ann['y2'] / self.scale_y
-                    x_center = (x1 + x2) / 2 / self.image_width
-                    y_center = (y1 + y2) / 2 / self.image_height
-                    width = (x2 - x1) / self.image_width
-                    height = (y2 - y1) / self.image_height
+                    x_center = (ann['x1'] + ann['x2']) / 2 / self.image_width
+                    y_center = (ann['y1'] + ann['y2']) / 2 / self.image_height
+                    width = (ann['x2'] - ann['x1']) / self.image_width
+                    height = (ann['y2'] - ann['y1']) / self.image_height
                     f.write(f"{class_id} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}\n")
             if show_message:
                 messagebox.showinfo("Успех", "Аннотации сохранены")
