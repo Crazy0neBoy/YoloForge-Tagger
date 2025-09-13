@@ -231,7 +231,7 @@ class ImageLabeler:
 
     def redraw_annotations(self):
         """Перерисовывает все аннотации на холсте"""
-        self.canvas.delete("rectangle", "handle", "text")
+        self.canvas.delete("rectangle", "handle", "text", "center")
         for i, ann in enumerate(self.annotations):
             x1, y1 = self.image_to_canvas(ann['x1'], ann['y1'])
             x2, y2 = self.image_to_canvas(ann['x2'], ann['y2'])
@@ -243,6 +243,26 @@ class ImageLabeler:
             self.canvas.create_rectangle(
                 x2 - 5, y2 - 5, x2 + 5, y2 + 5,
                 fill="blue", tags=("handle", f"handle_{i}_br")
+            )
+            self.canvas.create_rectangle(
+                x1 - 5, y1 - 5, x1 + 5, y1 + 5,
+                fill="blue", tags=("handle", f"handle_{i}_tl")
+            )
+            self.canvas.create_rectangle(
+                x2 - 5, y1 - 5, x2 + 5, y1 + 5,
+                fill="blue", tags=("handle", f"handle_{i}_tr")
+            )
+            self.canvas.create_rectangle(
+                x1 - 5, y2 - 5, x1 + 5, y2 + 5,
+                fill="blue", tags=("handle", f"handle_{i}_bl")
+            )
+            cx = (x1 + x2) / 2
+            cy = (y1 + y2) / 2
+            self.canvas.create_line(
+                cx - 5, cy, cx + 5, cy, fill=color, tags="center"
+            )
+            self.canvas.create_line(
+                cx, cy - 5, cx, cy + 5, fill=color, tags="center"
             )
             self.canvas.create_text(
                 x1,
@@ -301,9 +321,17 @@ class ImageLabeler:
         elif self.selected_rect is not None:
             ann = self.annotations[self.selected_rect]
             if self.resize_corner:  # Изменение размера
+                ix, iy = self.canvas_to_image(x, y)
                 if self.resize_corner == "br":
-                    ix, iy = self.canvas_to_image(x, y)
                     ann['x2'], ann['y2'] = ix, iy
+                elif self.resize_corner == "tl":
+                    ann['x1'], ann['y1'] = ix, iy
+                elif self.resize_corner == "tr":
+                    ann['x2'], ann['y1'] = ix, iy
+                elif self.resize_corner == "bl":
+                    ann['x1'], ann['y2'] = ix, iy
+                ann['x1'], ann['x2'] = sorted([ann['x1'], ann['x2']])
+                ann['y1'], ann['y2'] = sorted([ann['y1'], ann['y2']])
                 self.redraw_annotations()
             else:  # Перетаскивание
                 new_x1 = x - self.start_x
