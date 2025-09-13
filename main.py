@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import messagebox, filedialog
+from tkinter import messagebox
 from PIL import Image, ImageTk
 from pathlib import Path
 from collections import Counter
@@ -12,19 +12,23 @@ class ImageLabeler:
         self.root.title("Программа для разметки изображений")
         self.root.geometry("1400x700")  # Увеличил ширину окна для статистики
 
-        # Выбор папки с задачей
-        selected_path = filedialog.askdirectory(title="Выберите папку задачи", initialdir="Tasks")
-        self.task_path = Path(selected_path) if selected_path else Path("Tasks/job_1")
-        self.image_path = self.task_path / "images"
-        self.classes_file = self.task_path / "classes.txt"
+        # Список доступных задач
+        self.tasks_root = Path("Tasks")
+        self.task_names = [p.name for p in self.tasks_root.iterdir() if p.is_dir()]
+        self.current_task = tk.StringVar(value=self.task_names[0] if self.task_names else "")
 
-        # Загрузка классов
-        self.classes = self.load_classes()
-        self.current_class = tk.StringVar(value=self.classes[0] if self.classes else "")
-        self.class_colors = {cls: self.generate_color(cls) for cls in self.classes}
+        # Пути и параметры текущей задачи
+        self.task_path = None
+        self.image_path = None
+        self.classes_file = None
 
-        # Загрузка списка изображений
-        self.image_files = [f for f in self.image_path.glob("*.jpg") if f.is_file()]
+        # Классы и цвета
+        self.classes = []
+        self.current_class = tk.StringVar(value="")
+        self.class_colors = {}
+
+        # Список изображений
+        self.image_files = []
         self.current_image_index = 0
         self.current_image = None
         self.image_tk = None
@@ -50,9 +54,11 @@ class ImageLabeler:
         self.root.bind_all("<Left>", lambda e: self.prev_image())
         self.root.bind_all("<Right>", lambda e: self.next_image())
 
-        # Загрузка первого изображения
-        if self.image_files:
-            self.load_image(self.image_files[self.current_image_index])
+        # Если есть задачи, загружаем первую
+        if self.task_names:
+            self.load_task(self.current_task.get())
+        else:
+            self.update_stats()
 
     def load_classes(self):
         """Загружает классы из файла classes.txt"""
@@ -69,8 +75,51 @@ class ImageLabeler:
         b = int(h[4:6], 16)
         return f"#{r:02x}{g:02x}{b:02x}"
 
+    def load_task(self, task_name):
+        """Загружает задачу: классы и изображения"""
+        self.task_path = self.tasks_root / task_name
+        self.image_path = self.task_path / "images"
+        self.classes_file = self.task_path / "classes.txt"
+
+        # Загрузка классов
+        self.classes = self.load_classes()
+        self.current_class.set(self.classes[0] if self.classes else "")
+        self.class_colors = {cls: self.generate_color(cls) for cls in self.classes}
+
+        # Обновление списка классов
+        self.classes_var.set(self.classes)
+        for idx, cls in enumerate(self.classes):
+            color = self.class_colors.get(cls, "black")
+            self.class_listbox.itemconfig(idx, fg=color)
+
+        # Загрузка изображений
+        self.image_files = [f for f in self.image_path.glob("*.jpg") if f.is_file()]
+        self.current_image_index = 0
+        self.annotations = []
+        if self.image_files:
+            self.load_image(self.image_files[self.current_image_index])
+        else:
+            self.canvas.delete("all")
+            self.update_stats()
+
+    def on_task_change(self, value):
+        """Обработка смены задачи из выпадающего списка"""
+        self.save_annotations()
+        if value:
+            self.load_task(value)
+
     def create_widgets(self):
         """Создает элементы интерфейса"""
+        # Верхний фрейм для выбора задачи
+        self.top_frame = tk.Frame(self.root)
+        self.top_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
+        tk.Label(self.top_frame, text="Задача:").pack(side=tk.LEFT)
+        task_options = self.task_names if self.task_names else [""]
+        self.task_menu = tk.OptionMenu(
+            self.top_frame, self.current_task, *task_options, command=self.on_task_change
+        )
+        self.task_menu.pack(side=tk.LEFT)
+
         # Левый фрейм для классов и подсказок
         self.left_frame = tk.Frame(self.root, width=200)
         self.left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
@@ -123,9 +172,6 @@ class ImageLabeler:
         tk.Label(self.right_frame, text="Статистика:").pack(anchor=tk.W)
         self.stats_text = tk.Text(self.right_frame, width=30, height=15, state=tk.DISABLED)
         self.stats_text.pack(anchor=tk.W, pady=5)
-
-        # Обновление статистики
-        self.update_stats()
 
     def load_image(self, image_path):
         """Загружает изображение на холст"""
@@ -364,6 +410,13 @@ class ImageLabeler:
 
     def update_stats(self):
         """Обновляет статистику"""
+        if not self.image_path:
+            self.stats_text.config(state=tk.NORMAL)
+            self.stats_text.delete("1.0", tk.END)
+            self.stats_text.insert(tk.END, "Нет доступных задач\n")
+            self.stats_text.config(state=tk.DISABLED)
+            return
+
         # Подсчет размеченных изображений
         labeled_images = sum(1 for img in self.image_files if (self.image_path / f"{img.stem}.txt").exists())
 
