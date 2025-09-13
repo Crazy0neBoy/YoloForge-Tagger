@@ -121,17 +121,8 @@ class ImageLabeler:
         self.stats_label = tk.Label(self.right_frame, text="", justify=tk.LEFT)
         self.stats_label.pack(anchor=tk.W, pady=5)
 
-        # Кнопки навигации и счетчик изображений
-        self.nav_frame = tk.Frame(self.root)
-        self.nav_frame.pack(side=tk.BOTTOM, fill=tk.X)
-        tk.Button(self.nav_frame, text="Предыдущее", command=self.prev_image).pack(side=tk.LEFT, padx=5)
-        self.image_counter = tk.Label(self.nav_frame, text="")
-        self.image_counter.pack(side=tk.LEFT, padx=5)
-        tk.Button(self.nav_frame, text="Следующее", command=self.next_image).pack(side=tk.LEFT, padx=5)
-
-        # Обновление статистики и счетчика
+        # Обновление статистики
         self.update_stats()
-        self.update_image_counter()
 
     def load_image(self, image_path):
         """Загружает изображение на холст"""
@@ -158,7 +149,6 @@ class ImageLabeler:
                             'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2
                         })
         self.redraw_annotations()
-        self.update_image_counter()
         self.update_stats()
 
     def display_image(self):
@@ -364,10 +354,6 @@ class ImageLabeler:
                 messagebox.showinfo("Успех", "Аннотации сохранены")
             self.update_stats()
 
-    def update_image_counter(self):
-        """Обновляет счетчик изображений"""
-        self.image_counter.config(text=f"{self.current_image_index + 1}/{len(self.image_files)}")
-
     def update_stats(self):
         """Обновляет статистику"""
         # Подсчет размеченных изображений
@@ -391,6 +377,7 @@ class ImageLabeler:
 
         # Формирование текста статистики
         stats_text = (
+            f"Текущее изображение: {self.current_image_index + 1}/{len(self.image_files)}\n"
             f"Размеченных изображений: {labeled_images}/{len(self.image_files)}\n\n"
             f"Классы в текущем изображении:\n"
         )
