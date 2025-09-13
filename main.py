@@ -4,6 +4,7 @@ from PIL import Image, ImageTk
 from pathlib import Path
 from collections import Counter
 import hashlib
+import shutil
 
 
 class ImageLabeler:
@@ -53,6 +54,7 @@ class ImageLabeler:
         # Глобальные горячие клавиши для переключения изображений
         self.root.bind_all("<Left>", lambda e: self.prev_image())
         self.root.bind_all("<Right>", lambda e: self.next_image())
+        self.root.bind_all("<Button-2>", self.export_labeled_images)
 
         # Если есть задачи, загружаем первую
         if self.task_names:
@@ -490,6 +492,31 @@ class ImageLabeler:
             self.stats_text.insert(tk.END, cls, cls)
             self.stats_text.insert(tk.END, f": {count}\n")
         self.stats_text.config(state=tk.DISABLED)
+
+    def export_labeled_images(self, event=None):
+        """Создает Result/Задачи и перемещает туда размеченные изображения."""
+        self.save_annotations()
+        base_dir = Path(__file__).resolve().parent
+        result_root = base_dir / "Result" / "Задачи"
+        result_root.mkdir(parents=True, exist_ok=True)
+        for task_name in self.task_names:
+            src_dir = self.tasks_root / task_name / "images"
+            dst_dir = result_root / task_name / "images"
+            dst_dir.mkdir(parents=True, exist_ok=True)
+            for txt_file in src_dir.glob("*.txt"):
+                stem = txt_file.stem
+                image_file = None
+                for ext in [".jpg", ".jpeg", ".png"]:
+                    candidate = src_dir / f"{stem}{ext}"
+                    if candidate.exists():
+                        image_file = candidate
+                        break
+                if image_file:
+                    shutil.move(str(image_file), dst_dir / image_file.name)
+                    shutil.move(str(txt_file), dst_dir / txt_file.name)
+        current = self.current_task.get()
+        if current:
+            self.load_task(current)
 
     def on_close(self):
         """Сохранение данных при закрытии окна"""
