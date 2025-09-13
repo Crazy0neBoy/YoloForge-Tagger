@@ -81,6 +81,9 @@ class ImageLabeler:
         self.class_listbox = tk.Listbox(self.left_frame, listvariable=self.classes_var, height=10)
         self.class_listbox.pack(fill=tk.X, pady=5)
         self.class_listbox.bind('<<ListboxSelect>>', self.on_class_select)
+        for idx, cls in enumerate(self.classes):
+            color = self.class_colors.get(cls, "black")
+            self.class_listbox.itemconfig(idx, fg=color)
 
         # Подсказка по использованию программы
         tk.Label(
@@ -118,8 +121,8 @@ class ImageLabeler:
         self.right_frame = tk.Frame(self.root, width=200)
         self.right_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=5, pady=5)
         tk.Label(self.right_frame, text="Статистика:").pack(anchor=tk.W)
-        self.stats_label = tk.Label(self.right_frame, text="", justify=tk.LEFT)
-        self.stats_label.pack(anchor=tk.W, pady=5)
+        self.stats_text = tk.Text(self.right_frame, width=30, height=15, state=tk.DISABLED)
+        self.stats_text.pack(anchor=tk.W, pady=5)
 
         # Обновление статистики
         self.update_stats()
@@ -196,8 +199,13 @@ class ImageLabeler:
                 fill="blue", tags=("handle", f"handle_{i}_br")
             )
             self.canvas.create_text(
-                x1, y1 - 10,
-                text=ann['class'], fill=color, anchor=tk.SW, tags="text"
+                x1,
+                y1 - 10,
+                text=ann['class'],
+                fill=color,
+                anchor=tk.SW,
+                tags="text",
+                font=("TkDefaultFont", 10, "bold"),
             )
 
     def start_action(self, event):
@@ -315,27 +323,27 @@ class ImageLabeler:
 
     def scroll_image(self, event):
         """Прокрутка изображений колесиком мыши"""
-        if event.delta > 0 and self.current_image_index > 0:
-            self.save_annotations()
-            self.current_image_index -= 1
-            self.load_image(self.image_files[self.current_image_index])
-        elif event.delta < 0 and self.current_image_index < len(self.image_files) - 1:
-            self.save_annotations()
-            self.current_image_index += 1
-            self.load_image(self.image_files[self.current_image_index])
+        if not self.image_files:
+            return
+        self.save_annotations()
+        if event.delta > 0:
+            self.current_image_index = (self.current_image_index - 1) % len(self.image_files)
+        else:
+            self.current_image_index = (self.current_image_index + 1) % len(self.image_files)
+        self.load_image(self.image_files[self.current_image_index])
 
     def prev_image(self):
         """Переключение на предыдущее изображение"""
-        if self.current_image_index > 0:
+        if self.image_files:
             self.save_annotations()
-            self.current_image_index -= 1
+            self.current_image_index = (self.current_image_index - 1) % len(self.image_files)
             self.load_image(self.image_files[self.current_image_index])
 
     def next_image(self):
         """Переключение на следующее изображение"""
-        if self.current_image_index < len(self.image_files) - 1:
+        if self.image_files:
             self.save_annotations()
-            self.current_image_index += 1
+            self.current_image_index = (self.current_image_index + 1) % len(self.image_files)
             self.load_image(self.image_files[self.current_image_index])
 
     def save_annotations(self, show_message=False):
@@ -375,19 +383,32 @@ class ImageLabeler:
                             if class_id < len(self.classes):
                                 all_class_counts[self.classes[class_id]] += 1
 
-        # Формирование текста статистики
-        stats_text = (
-            f"Текущее изображение: {self.current_image_index + 1}/{len(self.image_files)}\n"
-            f"Размеченных изображений: {labeled_images}/{len(self.image_files)}\n\n"
-            f"Классы в текущем изображении:\n"
+        # Формирование текста статистики с подсветкой классов
+        self.stats_text.config(state=tk.NORMAL)
+        self.stats_text.delete("1.0", tk.END)
+        self.stats_text.insert(
+            tk.END,
+            f"Текущее изображение: {self.current_image_index + 1}/{len(self.image_files)}\n",
         )
+        self.stats_text.insert(
+            tk.END,
+            f"Размеченных изображений: {labeled_images}/{len(self.image_files)}\n\n",
+        )
+        self.stats_text.insert(tk.END, "Классы в текущем изображении:\n")
         for cls, count in class_counts.items():
-            stats_text += f"  {cls}: {count}\n"
-        stats_text += "\nКлассы во всех аннотациях:\n"
+            color = self.class_colors.get(cls, "black")
+            self.stats_text.tag_config(cls, foreground=color)
+            self.stats_text.insert(tk.END, "  ")
+            self.stats_text.insert(tk.END, cls, cls)
+            self.stats_text.insert(tk.END, f": {count}\n")
+        self.stats_text.insert(tk.END, "\nКлассы во всех аннотациях:\n")
         for cls, count in all_class_counts.items():
-            stats_text += f"  {cls}: {count}\n"
-
-        self.stats_label.config(text=stats_text)
+            color = self.class_colors.get(cls, "black")
+            self.stats_text.tag_config(cls, foreground=color)
+            self.stats_text.insert(tk.END, "  ")
+            self.stats_text.insert(tk.END, cls, cls)
+            self.stats_text.insert(tk.END, f": {count}\n")
+        self.stats_text.config(state=tk.DISABLED)
 
     def on_close(self):
         """Сохранение данных при закрытии окна"""
