@@ -503,14 +503,14 @@ class ImageLabeler:
         self.stats_text.config(state=tk.DISABLED)
 
     def export_labeled_images(self, event=None):
-        """Создает Result/Задачи и перемещает туда размеченные изображения."""
+        """Создает Result/<название_задачи> и перемещает туда размеченные изображения."""
         self.save_annotations()
         base_dir = Path(__file__).resolve().parent
-        result_root = base_dir / "Result" / "Задачи"
+        result_root = base_dir / "Result"
         result_root.mkdir(parents=True, exist_ok=True)
         for task_name in self.task_names:
             src_dir = self.tasks_root / task_name / "images"
-            dst_dir = result_root / task_name / "images"
+            dst_dir = result_root / task_name
             dst_dir.mkdir(parents=True, exist_ok=True)
             for txt_file in src_dir.glob("*.txt"):
                 stem = txt_file.stem
