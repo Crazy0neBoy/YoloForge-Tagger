@@ -103,6 +103,7 @@ class ImageLabeler:
         else:
             self.canvas.delete("all")
             self.update_stats()
+        self.update_edit_button_state()
 
     def on_task_change(self, value):
         """Обработка смены задачи из выпадающего списка"""
@@ -136,6 +137,12 @@ class ImageLabeler:
             color = self.class_colors.get(cls, "black")
             self.class_listbox.itemconfig(idx, fg=color)
 
+        # Кнопка редактирования классов
+        self.edit_button = tk.Button(
+            self.left_frame, text="Редактировать классы", command=self.edit_classes
+        )
+        self.edit_button.pack(fill=tk.X, pady=5)
+
         # Подсказка по использованию программы
         tk.Label(
             self.left_frame,
@@ -143,6 +150,8 @@ class ImageLabeler:
                 "ЛКМ - рисовать/перемещать\n"
                 "ПКМ - удалить рамку\n"
                 "Колесо - след. изображение\n"
+                "Нажатие колёсика - перенос\n"
+                "размеченных изображений\n"
                 "Аннотации сохраняются\n"
                 "автоматически"
             ),
@@ -174,6 +183,78 @@ class ImageLabeler:
         tk.Label(self.right_frame, text="Статистика:").pack(anchor=tk.W)
         self.stats_text = tk.Text(self.right_frame, width=30, height=15, state=tk.DISABLED)
         self.stats_text.pack(anchor=tk.W, pady=5)
+
+        self.update_edit_button_state()
+
+    def can_edit_classes(self):
+        """Проверяет, можно ли редактировать классы"""
+        result_dir = Path(__file__).resolve().parent / "Result"
+        if not result_dir.exists():
+            return True
+        for cls in self.classes:
+            if (result_dir / cls).exists():
+                return False
+        return True
+
+    def update_edit_button_state(self):
+        """Обновляет состояние кнопки редактирования классов"""
+        state = tk.NORMAL if self.can_edit_classes() else tk.DISABLED
+        self.edit_button.config(state=state)
+
+    def edit_classes(self):
+        """Открывает окно редактирования классов, если это возможно"""
+        if not self.can_edit_classes():
+            messagebox.showwarning(
+                "Недоступно",
+                "Редактирование классов недоступно, так как в папке Result есть папки с названиями классов",
+            )
+            return
+        self.open_class_editor()
+
+    def open_class_editor(self):
+        """Окно для добавления и удаления классов"""
+        editor = tk.Toplevel(self.root)
+        editor.title("Редактирование классов")
+
+        list_var = tk.StringVar(value=self.classes)
+        listbox = tk.Listbox(editor, listvariable=list_var, height=10)
+        listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        entry = tk.Entry(editor)
+        entry.pack(fill=tk.X, padx=5)
+
+        def add_class():
+            name = entry.get().strip()
+            if name and name not in self.classes:
+                self.classes.append(name)
+                list_var.set(self.classes)
+                entry.delete(0, tk.END)
+
+        def delete_class():
+            sel = listbox.curselection()
+            if sel:
+                cls = listbox.get(sel[0])
+                self.classes.remove(cls)
+                list_var.set(self.classes)
+
+        tk.Button(editor, text="Добавить", command=add_class).pack(padx=5, pady=2)
+        tk.Button(editor, text="Удалить", command=delete_class).pack(padx=5, pady=2)
+
+        def save_and_close():
+            with open(self.classes_file, 'w') as f:
+                for cls in self.classes:
+                    f.write(f"{cls}\n")
+            self.class_colors = {cls: self.generate_color(cls) for cls in self.classes}
+            self.classes_var.set(self.classes)
+            for idx, cls in enumerate(self.classes):
+                color = self.class_colors.get(cls, "black")
+                self.class_listbox.itemconfig(idx, fg=color)
+            self.current_class.set(self.classes[0] if self.classes else "")
+            self.redraw_annotations()
+            self.update_edit_button_state()
+            editor.destroy()
+
+        tk.Button(editor, text="Сохранить", command=save_and_close).pack(padx=5, pady=5)
 
     def load_image(self, image_path):
         """Загружает изображение на холст"""
