@@ -184,7 +184,7 @@ class ImageLabeler:
         # Загрузка аннотаций, если они есть
         annotation_file = self.image_path / f"{image_path.stem}.txt"
         self.annotations = []
-        if annotation_file.exists():
+        if annotation_file.exists() and annotation_file.stat().st_size > 0:
             with open(annotation_file, 'r') as f:
                 for line in f:
                     parts = line.strip().split()
@@ -424,8 +424,10 @@ class ImageLabeler:
 
     def save_annotations(self, show_message=False):
         """Сохранение аннотаций в файл .txt в формате YOLO"""
-        if self.image_files:
-            annotation_file = self.image_path / f"{self.image_files[self.current_image_index].stem}.txt"
+        if not self.image_files:
+            return
+        annotation_file = self.image_path / f"{self.image_files[self.current_image_index].stem}.txt"
+        if self.annotations:
             with open(annotation_file, 'w') as f:
                 for ann in self.annotations:
                     class_id = self.classes.index(ann['class']) if ann['class'] in self.classes else 0
@@ -436,7 +438,9 @@ class ImageLabeler:
                     f.write(f"{class_id} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}\n")
             if show_message:
                 messagebox.showinfo("Успех", "Аннотации сохранены")
-            self.update_stats()
+        elif annotation_file.exists():
+            annotation_file.unlink()
+        self.update_stats()
 
     def update_stats(self):
         """Обновляет статистику"""
@@ -447,8 +451,13 @@ class ImageLabeler:
             self.stats_text.config(state=tk.DISABLED)
             return
 
-        # Подсчет размеченных изображений
-        labeled_images = sum(1 for img in self.image_files if (self.image_path / f"{img.stem}.txt").exists())
+        # Подсчет размеченных изображений (файлы с хотя бы одной записью)
+        labeled_images = sum(
+            1
+            for img in self.image_files
+            if (self.image_path / f"{img.stem}.txt").exists()
+            and (self.image_path / f"{img.stem}.txt").stat().st_size > 0
+        )
 
         # Подсчет классов в текущем изображении
         class_counts = Counter(ann['class'] for ann in self.annotations)
@@ -457,7 +466,7 @@ class ImageLabeler:
         all_class_counts = Counter()
         for img in self.image_files:
             ann_file = self.image_path / f"{img.stem}.txt"
-            if ann_file.exists():
+            if ann_file.exists() and ann_file.stat().st_size > 0:
                 with open(ann_file, 'r') as f:
                     for line in f:
                         parts = line.strip().split()
