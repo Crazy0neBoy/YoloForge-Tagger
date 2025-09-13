@@ -214,6 +214,7 @@ class ImageLabeler:
         """Начало действия: рисование, выбор или перетаскивание"""
         x, y = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
 
+        # Проверяем маркеры изменения размера
         items = self.canvas.find_overlapping(x, y, x, y)
         for item in items:
             tags = self.canvas.gettags(item)
@@ -222,16 +223,24 @@ class ImageLabeler:
                 self.resize_corner = tags[1].split("_")[2]
                 self.start_x, self.start_y = x, y
                 return
-            if "rectangle" in tags:
-                self.selected_rect = int(tags[1].split("_")[1])
-                x1, y1 = self.image_to_canvas(self.annotations[self.selected_rect]['x1'], self.annotations[self.selected_rect]['y1'])
-                self.start_x, self.start_y = x - x1, y - y1
+
+        # Проверяем попадание в существующий прямоугольник
+        ix, iy = self.canvas_to_image(x, y)
+        for i, ann in enumerate(self.annotations):
+            if ann['x1'] <= ix <= ann['x2'] and ann['y1'] <= iy <= ann['y2']:
+                self.selected_rect = i
+                rect_x1, rect_y1 = self.image_to_canvas(ann['x1'], ann['y1'])
+                self.start_x = x - rect_x1
+                self.start_y = y - rect_y1
                 self.resize_corner = None
                 return
 
-        if not (self.offset_x <= x <= self.offset_x + self.image_width * self.scale and self.offset_y <= y <= self.offset_y + self.image_height * self.scale):
+        # Клик вне изображения — игнорируем
+        if not (self.offset_x <= x <= self.offset_x + self.image_width * self.scale and
+                self.offset_y <= y <= self.offset_y + self.image_height * self.scale):
             return
 
+        # Начало рисования нового прямоугольника
         self.selected_rect = None
         self.start_x, self.start_y = x, y
         color = self.class_colors.get(self.current_class.get(), "red")
