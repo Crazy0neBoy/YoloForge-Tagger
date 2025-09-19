@@ -6,6 +6,11 @@ from collections import Counter
 import hashlib
 import shutil
 
+try:
+    import torch
+except Exception:  # noqa: BLE001
+    torch = None
+
 
 class ImageLabeler:
     def __init__(self, root):
@@ -35,6 +40,15 @@ class ImageLabeler:
         self.loaded_models = {}
         self.confidence_var = tk.DoubleVar(value=0.25)
         self.iou_var = tk.DoubleVar(value=0.45)
+        self.device_info_var = tk.StringVar(
+            value=(
+                "При выборе модели best.pt устройство подбирается автоматически: "
+                "GPU, если доступно, иначе CPU."
+            )
+        )
+        self.current_device = None
+        self.auto_detect_var = tk.BooleanVar(value=False)
+        self.auto_detect_check = None
         self.model_var.trace_add("write", self.on_model_change)
 
         # Список изображений
@@ -128,7 +142,37 @@ class ImageLabeler:
         name = self.model_var.get()
         return self.model_path_by_name.get(name)
 
+    def determine_device_for_model(self, model_path):
+        if not model_path:
+            return None, ""
+        if model_path.name.lower() == "best.pt":
+            has_gpu = False
+            if torch is not None:
+                try:
+                    has_gpu = torch.cuda.is_available()
+                except Exception:  # noqa: BLE001
+                    has_gpu = False
+            device = "cuda" if has_gpu else "cpu"
+            device_name = "GPU" if device == "cuda" else "CPU"
+            return device, (
+                f"Модель best.pt: используется {device_name} (выбор автоматически)."
+            )
+        return None, ""
+
+    def update_device_info(self):
+        model_path = self.get_selected_model_path()
+        device, info_text = self.determine_device_for_model(model_path)
+        if info_text:
+            self.device_info_var.set(info_text)
+        else:
+            self.device_info_var.set(
+                "При выборе модели best.pt устройство подбирается автоматически: "
+                "GPU, если доступно, иначе CPU."
+            )
+        self.current_device = device
+
     def on_model_change(self, *args):
+        self.update_device_info()
         self.update_detection_controls_state()
 
     def update_detection_controls_state(self):
@@ -140,6 +184,8 @@ class ImageLabeler:
         self.confidence_scale.config(state=controls_state)
         self.iou_scale.config(state=controls_state)
         self.detect_button.config(state=controls_state)
+        if self.auto_detect_check is not None:
+            self.auto_detect_check.config(state=controls_state)
 
         has_auto = any(ann.get("auto") for ann in self.annotations)
         self.clear_detections_button.config(state=tk.NORMAL if has_auto else tk.DISABLED)
@@ -281,6 +327,14 @@ class ImageLabeler:
         self.model_menu.config(state=tk.DISABLED, width=20)
         self.model_menu.pack(fill=tk.X, pady=(0, 5))
 
+        self.device_info_label = tk.Label(
+            self.detection_frame,
+            textvariable=self.device_info_var,
+            justify=tk.LEFT,
+            wraplength=180,
+        )
+        self.device_info_label.pack(fill=tk.X, pady=(0, 5))
+
         self.confidence_scale = tk.Scale(
             self.detection_frame,
             from_=0.05,
@@ -320,6 +374,16 @@ class ImageLabeler:
             state=tk.DISABLED,
         )
         self.clear_detections_button.pack(fill=tk.X, pady=(0, 5))
+
+        self.auto_detect_check = tk.Checkbutton(
+            self.detection_frame,
+            text="Авто-поиск при прокрутке (если нет объектов)",
+            variable=self.auto_detect_var,
+            justify=tk.LEFT,
+            wraplength=180,
+            state=tk.DISABLED,
+        )
+        self.auto_detect_check.pack(fill=tk.X, pady=(0, 5))
 
         self.update_edit_button_state()
         self.update_detection_controls_state()
@@ -704,6 +768,15 @@ class ImageLabeler:
         else:
             self.current_image_index = (self.current_image_index + 1) % len(self.image_files)
         self.load_image(self.image_files[self.current_image_index])
+        if (
+            self.auto_detect_var.get()
+            and not self.annotations
+            and self.get_selected_model_path()
+            and self.classes
+            and getattr(self.detect_button, "cget", None)
+            and self.detect_button.cget("state") == tk.NORMAL
+        ):
+            self.detect_objects(auto_triggered=True)
 
     def prev_image(self):
         """Переключение на предыдущее изображение"""
@@ -799,17 +872,28 @@ class ImageLabeler:
             self.stats_text.insert(tk.END, f": {count}\n")
         self.stats_text.config(state=tk.DISABLED)
 
-    def detect_objects(self):
+    def detect_objects(self, auto_triggered=False):
         """Запускает модель для поиска объектов на текущем изображении"""
         model_path = self.get_selected_model_path()
+        self.update_device_info()
+        device_to_use = self.current_device
         if not model_path:
-            messagebox.showwarning("Нет модели", "Выберите файл модели перед запуском поиска.")
+            if not auto_triggered:
+                messagebox.showwarning(
+                    "Нет модели", "Выберите файл модели перед запуском поиска."
+                )
             return
         if not self.current_image or not self.image_files:
-            messagebox.showwarning("Нет изображения", "Откройте изображение для поиска объектов.")
+            if not auto_triggered:
+                messagebox.showwarning(
+                    "Нет изображения", "Откройте изображение для поиска объектов."
+                )
             return
         if not self.classes:
-            messagebox.showwarning("Нет классов", "Сначала задайте список классов для задачи.")
+            if not auto_triggered:
+                messagebox.showwarning(
+                    "Нет классов", "Сначала задайте список классов для задачи."
+                )
             return
 
         try:
@@ -832,24 +916,29 @@ class ImageLabeler:
 
         image_file = self.image_files[self.current_image_index]
         try:
-            results = model.predict(
-                source=str(image_file),
-                conf=float(self.confidence_var.get()),
-                iou=float(self.iou_var.get()),
-                verbose=False,
-            )
+            predict_kwargs = {
+                "source": str(image_file),
+                "conf": float(self.confidence_var.get()),
+                "iou": float(self.iou_var.get()),
+                "verbose": False,
+            }
+            if device_to_use:
+                predict_kwargs["device"] = device_to_use
+            results = model.predict(**predict_kwargs)
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("Ошибка поиска", f"Не удалось выполнить поиск объектов:\n{exc}")
             return
 
         if not results:
-            messagebox.showinfo("Поиск завершён", "Объекты не найдены.")
+            if not auto_triggered:
+                messagebox.showinfo("Поиск завершён", "Объекты не найдены.")
             return
 
         result = results[0]
         boxes = getattr(result, "boxes", None)
         if boxes is None or len(boxes) == 0:
-            messagebox.showinfo("Поиск завершён", "Объекты не найдены.")
+            if not auto_triggered:
+                messagebox.showinfo("Поиск завершён", "Объекты не найдены.")
             return
 
         try:
@@ -881,7 +970,8 @@ class ImageLabeler:
             new_annotations.append(ann)
 
         if not new_annotations:
-            messagebox.showinfo("Поиск завершён", "Подходящие объекты не найдены.")
+            if not auto_triggered:
+                messagebox.showinfo("Поиск завершён", "Подходящие объекты не найдены.")
             return
 
         self.annotations = [ann for ann in self.annotations if not ann.get('auto')]
@@ -889,7 +979,8 @@ class ImageLabeler:
         self.redraw_annotations()
         self.update_stats()
         self.update_detection_controls_state()
-        messagebox.showinfo("Поиск завершён", f"Найдено объектов: {len(new_annotations)}")
+        if not auto_triggered:
+            messagebox.showinfo("Поиск завершён", f"Найдено объектов: {len(new_annotations)}")
 
     def clear_detected_annotations(self):
         """Удаляет рамки, созданные автоматическим поиском"""
