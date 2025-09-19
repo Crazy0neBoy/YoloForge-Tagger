@@ -276,10 +276,12 @@ class ImageLabeler:
                         y1 = (y_center - height / 2) * self.image_height
                         x2 = (x_center + width / 2) * self.image_width
                         y2 = (y_center + height / 2) * self.image_height
-                        self.annotations.append({
+                        ann = {
                             'class': self.classes[class_id] if class_id < len(self.classes) else "unknown",
                             'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2
-                        })
+                        }
+                        self.clamp_annotation(ann)
+                        self.annotations.append(ann)
         self.redraw_annotations()
         self.update_stats()
 
@@ -307,6 +309,39 @@ class ImageLabeler:
     def canvas_to_image(self, x, y):
         return (x - self.offset_x) / self.scale, (y - self.offset_y) / self.scale
 
+    def clamp_canvas_point(self, x, y):
+        """Ограничивает координаты в пределах отображаемого изображения"""
+        if not self.current_image:
+            return x, y
+        min_x = self.offset_x
+        min_y = self.offset_y
+        max_x = self.offset_x + self.image_width * self.scale
+        max_y = self.offset_y + self.image_height * self.scale
+        x = max(min_x, min(x, max_x))
+        y = max(min_y, min(y, max_y))
+        return x, y
+
+    def clamp_annotation(self, ann):
+        """Ограничивает координаты рамки границами изображения"""
+        ann['x1'], ann['x2'] = sorted((ann['x1'], ann['x2']))
+        ann['y1'], ann['y2'] = sorted((ann['y1'], ann['y2']))
+        ann['x1'] = max(0, min(ann['x1'], self.image_width))
+        ann['x2'] = max(0, min(ann['x2'], self.image_width))
+        ann['y1'] = max(0, min(ann['y1'], self.image_height))
+        ann['y2'] = max(0, min(ann['y2'], self.image_height))
+        if ann['x1'] == ann['x2']:
+            if ann['x1'] >= self.image_width:
+                ann['x1'] = max(0, self.image_width - 1)
+                ann['x2'] = self.image_width
+            else:
+                ann['x2'] = min(self.image_width, ann['x1'] + 1)
+        if ann['y1'] == ann['y2']:
+            if ann['y1'] >= self.image_height:
+                ann['y1'] = max(0, self.image_height - 1)
+                ann['y2'] = self.image_height
+            else:
+                ann['y2'] = min(self.image_height, ann['y1'] + 1)
+
     def on_canvas_resize(self, event):
         if self.current_image:
             self.display_image()
@@ -314,7 +349,7 @@ class ImageLabeler:
 
     def redraw_annotations(self):
         """Перерисовывает все аннотации на холсте"""
-        self.canvas.delete("rectangle", "handle", "text", "center")
+        self.canvas.delete("rectangle", "handle", "text", "text_bg", "center")
         for i, ann in enumerate(self.annotations):
             x1, y1 = self.image_to_canvas(ann['x1'], ann['y1'])
             x2, y2 = self.image_to_canvas(ann['x2'], ann['y2'])
@@ -347,15 +382,24 @@ class ImageLabeler:
             self.canvas.create_line(
                 cx, cy - 5, cx, cy + 5, fill=color, tags="center"
             )
-            self.canvas.create_text(
-                x1,
-                y1 - 10,
+            text_item = self.canvas.create_text(
+                x1 + 4,
+                y1 + 4,
                 text=ann['class'],
-                fill=color,
-                anchor=tk.SW,
-                tags="text",
+                fill="white",
+                anchor=tk.NW,
+                tags=("text", f"text_{i}"),
                 font=("TkDefaultFont", 10, "bold"),
             )
+            bbox = self.canvas.bbox(text_item)
+            if bbox:
+                bg_item = self.canvas.create_rectangle(
+                    bbox,
+                    fill="black",
+                    outline="",
+                    tags=("text_bg", f"text_bg_{i}"),
+                )
+                self.canvas.tag_lower(bg_item, text_item)
 
     def start_action(self, event):
         """Начало действия: рисование, выбор или перетаскивание"""
@@ -380,6 +424,11 @@ class ImageLabeler:
                 self.start_x = x - rect_x1
                 self.start_y = y - rect_y1
                 self.resize_corner = None
+                current = self.current_class.get()
+                if current and ann['class'] != current:
+                    ann['class'] = current
+                    self.redraw_annotations()
+                    self.update_stats()
                 return
 
         # Клик вне изображения — игнорируем
@@ -389,15 +438,19 @@ class ImageLabeler:
 
         # Начало рисования нового прямоугольника
         self.selected_rect = None
-        self.start_x, self.start_y = x, y
+        self.start_x, self.start_y = self.clamp_canvas_point(x, y)
         color = self.class_colors.get(self.current_class.get(), "red")
         self.current_rect = self.canvas.create_rectangle(
-            x, y, x, y, outline=color, width=2, tags="rectangle"
+            self.start_x, self.start_y, self.start_x, self.start_y,
+            outline=color, width=2, tags="rectangle"
         )
 
     def draw_or_resize_or_drag(self, event):
         """Рисование, изменение размера или перетаскивание"""
+        if not self.current_image:
+            return
         x, y = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
+        x, y = self.clamp_canvas_point(x, y)
 
         if self.current_rect:  # Рисование нового прямоугольника
             self.canvas.coords(self.current_rect, self.start_x, self.start_y, x, y)
@@ -413,8 +466,7 @@ class ImageLabeler:
                     ann['x2'], ann['y1'] = ix, iy
                 elif self.resize_corner == "bl":
                     ann['x1'], ann['y2'] = ix, iy
-                ann['x1'], ann['x2'] = sorted([ann['x1'], ann['x2']])
-                ann['y1'], ann['y2'] = sorted([ann['y1'], ann['y2']])
+                self.clamp_annotation(ann)
                 self.redraw_annotations()
             else:  # Перетаскивание
                 new_x1 = x - self.start_x
@@ -422,25 +474,33 @@ class ImageLabeler:
                 ix1, iy1 = self.canvas_to_image(new_x1, new_y1)
                 width = ann['x2'] - ann['x1']
                 height = ann['y2'] - ann['y1']
+                max_x1 = max(0, self.image_width - width)
+                max_y1 = max(0, self.image_height - height)
+                ix1 = min(max(ix1, 0), max_x1)
+                iy1 = min(max(iy1, 0), max_y1)
                 ann['x1'], ann['y1'] = ix1, iy1
                 ann['x2'] = ix1 + width
                 ann['y2'] = iy1 + height
+                self.clamp_annotation(ann)
                 self.redraw_annotations()
 
     def end_action(self, event):
         """Завершение действия"""
         if self.current_rect:
             x, y = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
+            x, y = self.clamp_canvas_point(x, y)
             if abs(x - self.start_x) > 5 and abs(y - self.start_y) > 5:
                 x1, y1 = self.canvas_to_image(self.start_x, self.start_y)
                 x2, y2 = self.canvas_to_image(x, y)
-                self.annotations.append({
+                ann = {
                     'class': self.current_class.get(),
                     'x1': min(x1, x2),
                     'y1': min(y1, y2),
                     'x2': max(x1, x2),
                     'y2': max(y1, y2)
-                })
+                }
+                self.clamp_annotation(ann)
+                self.annotations.append(ann)
                 self.redraw_annotations()
                 self.update_stats()
             self.canvas.delete(self.current_rect)
