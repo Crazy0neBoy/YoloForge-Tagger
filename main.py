@@ -28,6 +28,15 @@ class ImageLabeler:
         self.current_class = tk.StringVar(value="")
         self.class_colors = {}
 
+        # Натренированные модели и параметры авторазметки
+        self.model_files = []
+        self.model_path_by_name = {}
+        self.model_var = tk.StringVar(value="")
+        self.loaded_models = {}
+        self.confidence_var = tk.DoubleVar(value=0.25)
+        self.iou_var = tk.DoubleVar(value=0.45)
+        self.model_var.trace_add("write", self.on_model_change)
+
         # Список изображений
         self.supported_extensions = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
         self.image_files = []
@@ -80,6 +89,66 @@ class ImageLabeler:
         b = int(h[4:6], 16)
         return f"#{r:02x}{g:02x}{b:02x}"
 
+    def update_model_list(self):
+        """Обновляет список доступных моделей .pt для текущей задачи"""
+        if not self.task_path:
+            self.model_files = []
+            self.model_path_by_name = {}
+            self.model_var.set("")
+            self.model_menu.config(state=tk.DISABLED)
+            return
+
+        self.model_files = sorted(
+            (p for p in self.task_path.glob("*.pt") if p.is_file()),
+            key=lambda p: p.name.lower(),
+        )
+        self.model_path_by_name = {path.name: path for path in self.model_files}
+
+        menu = self.model_menu["menu"]
+        menu.delete(0, "end")
+
+        if self.model_files:
+            for path in self.model_files:
+                menu.add_command(
+                    label=path.name,
+                    command=lambda value=path.name: self.model_var.set(value),
+                )
+            if self.model_var.get() not in self.model_path_by_name:
+                self.model_var.set(self.model_files[0].name)
+            else:
+                self.on_model_change()
+            self.model_menu.config(state=tk.NORMAL)
+        else:
+            menu.add_command(label="Нет доступных моделей", command=lambda: None)
+            self.model_var.set("")
+            self.model_menu.config(state=tk.DISABLED)
+            self.on_model_change()
+
+    def get_selected_model_path(self):
+        name = self.model_var.get()
+        return self.model_path_by_name.get(name)
+
+    def on_model_change(self, *args):
+        self.update_detection_controls_state()
+
+    def update_detection_controls_state(self):
+        """Переключает доступность элементов авторазметки"""
+        has_model = bool(self.get_selected_model_path())
+        has_image = self.current_image is not None
+        controls_state = tk.NORMAL if has_model and has_image else tk.DISABLED
+
+        self.confidence_scale.config(state=controls_state)
+        self.iou_scale.config(state=controls_state)
+        self.detect_button.config(state=controls_state)
+
+        has_auto = any(ann.get("auto") for ann in self.annotations)
+        self.clear_detections_button.config(state=tk.NORMAL if has_auto else tk.DISABLED)
+
+        if self.model_files:
+            self.model_menu.config(state=tk.NORMAL)
+        else:
+            self.model_menu.config(state=tk.DISABLED)
+
     def load_task(self, task_name):
         """Загружает задачу: классы и изображения"""
         self.task_path = self.tasks_root / task_name
@@ -97,6 +166,9 @@ class ImageLabeler:
             color = self.class_colors.get(cls, "black")
             self.class_listbox.itemconfig(idx, fg=color)
 
+        # Обновление списка доступных моделей
+        self.update_model_list()
+
         # Загрузка изображений
         if self.image_path.is_dir():
             self.image_files = sorted(
@@ -111,12 +183,15 @@ class ImageLabeler:
             self.image_files = []
         self.current_image_index = 0
         self.annotations = []
+        self.current_image = None
+        self.image_tk = None
         if self.image_files:
             self.load_image(self.image_files[self.current_image_index])
         else:
             self.canvas.delete("all")
             self.update_stats()
         self.update_edit_button_state()
+        self.update_detection_controls_state()
 
     def on_task_change(self, value):
         """Обработка смены задачи из выпадающего списка"""
@@ -197,7 +272,57 @@ class ImageLabeler:
         self.stats_text = tk.Text(self.right_frame, width=30, height=15, state=tk.DISABLED)
         self.stats_text.pack(anchor=tk.W, pady=5)
 
+        # Элементы управления для автоматического поиска объектов
+        self.detection_frame = tk.LabelFrame(self.right_frame, text="Авторазметка")
+        self.detection_frame.pack(fill=tk.X, pady=10)
+
+        tk.Label(self.detection_frame, text="Модель:").pack(anchor=tk.W)
+        self.model_menu = tk.OptionMenu(self.detection_frame, self.model_var, "")
+        self.model_menu.config(state=tk.DISABLED, width=20)
+        self.model_menu.pack(fill=tk.X, pady=(0, 5))
+
+        self.confidence_scale = tk.Scale(
+            self.detection_frame,
+            from_=0.05,
+            to=0.95,
+            resolution=0.05,
+            orient=tk.HORIZONTAL,
+            label="Порог уверенности",
+            variable=self.confidence_var,
+            state=tk.DISABLED,
+        )
+        self.confidence_scale.pack(fill=tk.X, pady=5)
+
+        self.iou_scale = tk.Scale(
+            self.detection_frame,
+            from_=0.1,
+            to=0.95,
+            resolution=0.05,
+            orient=tk.HORIZONTAL,
+            label="IoU порог",
+            variable=self.iou_var,
+            state=tk.DISABLED,
+        )
+        self.iou_scale.pack(fill=tk.X, pady=5)
+
+        self.detect_button = tk.Button(
+            self.detection_frame,
+            text="Найти объекты",
+            command=self.detect_objects,
+            state=tk.DISABLED,
+        )
+        self.detect_button.pack(fill=tk.X, pady=(5, 2))
+
+        self.clear_detections_button = tk.Button(
+            self.detection_frame,
+            text="Очистить результаты",
+            command=self.clear_detected_annotations,
+            state=tk.DISABLED,
+        )
+        self.clear_detections_button.pack(fill=tk.X, pady=(0, 5))
+
         self.update_edit_button_state()
+        self.update_detection_controls_state()
 
     def can_edit_classes(self):
         """Проверяет, можно ли редактировать классы"""
@@ -297,6 +422,7 @@ class ImageLabeler:
                         self.annotations.append(ann)
         self.redraw_annotations()
         self.update_stats()
+        self.update_detection_controls_state()
 
     def display_image(self):
         """Отображает текущее изображение с учетом размеров холста"""
@@ -550,6 +676,7 @@ class ImageLabeler:
                 del self.annotations[idx]
                 self.redraw_annotations()
                 self.update_stats()
+                self.update_detection_controls_state()
                 return
 
     def draw_crosshair(self, event):
@@ -671,6 +798,107 @@ class ImageLabeler:
             self.stats_text.insert(tk.END, cls, cls)
             self.stats_text.insert(tk.END, f": {count}\n")
         self.stats_text.config(state=tk.DISABLED)
+
+    def detect_objects(self):
+        """Запускает модель для поиска объектов на текущем изображении"""
+        model_path = self.get_selected_model_path()
+        if not model_path:
+            messagebox.showwarning("Нет модели", "Выберите файл модели перед запуском поиска.")
+            return
+        if not self.current_image or not self.image_files:
+            messagebox.showwarning("Нет изображения", "Откройте изображение для поиска объектов.")
+            return
+        if not self.classes:
+            messagebox.showwarning("Нет классов", "Сначала задайте список классов для задачи.")
+            return
+
+        try:
+            from ultralytics import YOLO
+        except ImportError:
+            messagebox.showerror(
+                "Модель недоступна",
+                "Для автоматического поиска объектов требуется установить пакет ultralytics.",
+            )
+            return
+
+        model = self.loaded_models.get(model_path)
+        if model is None:
+            try:
+                model = YOLO(str(model_path))
+            except Exception as exc:  # noqa: BLE001
+                messagebox.showerror("Ошибка модели", f"Не удалось загрузить модель:\n{exc}")
+                return
+            self.loaded_models[model_path] = model
+
+        image_file = self.image_files[self.current_image_index]
+        try:
+            results = model.predict(
+                source=str(image_file),
+                conf=float(self.confidence_var.get()),
+                iou=float(self.iou_var.get()),
+                verbose=False,
+            )
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("Ошибка поиска", f"Не удалось выполнить поиск объектов:\n{exc}")
+            return
+
+        if not results:
+            messagebox.showinfo("Поиск завершён", "Объекты не найдены.")
+            return
+
+        result = results[0]
+        boxes = getattr(result, "boxes", None)
+        if boxes is None or len(boxes) == 0:
+            messagebox.showinfo("Поиск завершён", "Объекты не найдены.")
+            return
+
+        try:
+            coordinates = boxes.xyxy.tolist()
+            class_ids = boxes.cls.tolist() if boxes.cls is not None else []
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("Ошибка обработки", f"Не удалось обработать результат модели:\n{exc}")
+            return
+
+        new_annotations = []
+        for idx, coords in enumerate(coordinates):
+            if len(coords) < 4:
+                continue
+            if idx >= len(class_ids):
+                continue
+            class_id = int(class_ids[idx])
+            if class_id < 0 or class_id >= len(self.classes):
+                continue
+            x1, y1, x2, y2 = coords[:4]
+            ann = {
+                'class': self.classes[class_id],
+                'x1': x1,
+                'y1': y1,
+                'x2': x2,
+                'y2': y2,
+                'auto': True,
+            }
+            self.clamp_annotation(ann)
+            new_annotations.append(ann)
+
+        if not new_annotations:
+            messagebox.showinfo("Поиск завершён", "Подходящие объекты не найдены.")
+            return
+
+        self.annotations = [ann for ann in self.annotations if not ann.get('auto')]
+        self.annotations.extend(new_annotations)
+        self.redraw_annotations()
+        self.update_stats()
+        self.update_detection_controls_state()
+        messagebox.showinfo("Поиск завершён", f"Найдено объектов: {len(new_annotations)}")
+
+    def clear_detected_annotations(self):
+        """Удаляет рамки, созданные автоматическим поиском"""
+        original_len = len(self.annotations)
+        self.annotations = [ann for ann in self.annotations if not ann.get('auto')]
+        if len(self.annotations) != original_len:
+            self.redraw_annotations()
+            self.update_stats()
+        self.update_detection_controls_state()
 
     def export_labeled_images(self, event=None):
         """Создает Result/<название_задачи> и перемещает туда размеченные изображения."""
