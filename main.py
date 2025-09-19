@@ -463,6 +463,8 @@ class ImageLabeler:
         """Рисование, изменение размера или перетаскивание"""
         if not self.current_image:
             return
+        # Обновляем линии прицела, чтобы они следовали за курсором во время рисования
+        self.draw_crosshair(event)
         x, y = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
         x, y = self.clamp_canvas_point(x, y)
 
