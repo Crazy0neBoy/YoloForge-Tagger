@@ -47,6 +47,8 @@ class ImageLabeler:
         self.selected_rect = None
         self.resize_handle = None
         self.resize_corner = None
+        self.action_moved = False
+        self.pending_class_change = None
 
         # Создание интерфейса
         self.create_widgets()
@@ -405,6 +407,9 @@ class ImageLabeler:
         """Начало действия: рисование, выбор или перетаскивание"""
         x, y = self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
 
+        self.action_moved = False
+        self.pending_class_change = None
+
         # Проверяем маркеры изменения размера
         items = self.canvas.find_overlapping(x, y, x, y)
         for item in items:
@@ -426,9 +431,7 @@ class ImageLabeler:
                 self.resize_corner = None
                 current = self.current_class.get()
                 if current and ann['class'] != current:
-                    ann['class'] = current
-                    self.redraw_annotations()
-                    self.update_stats()
+                    self.pending_class_change = current
                 return
 
         # Клик вне изображения — игнорируем
@@ -455,6 +458,7 @@ class ImageLabeler:
         if self.current_rect:  # Рисование нового прямоугольника
             self.canvas.coords(self.current_rect, self.start_x, self.start_y, x, y)
         elif self.selected_rect is not None:
+            self.action_moved = True
             ann = self.annotations[self.selected_rect]
             if self.resize_corner:  # Изменение размера
                 ix, iy = self.canvas_to_image(x, y)
@@ -505,8 +509,20 @@ class ImageLabeler:
                 self.update_stats()
             self.canvas.delete(self.current_rect)
             self.current_rect = None
+        elif (
+            self.selected_rect is not None
+            and not self.action_moved
+            and not self.resize_corner
+            and self.pending_class_change
+        ):
+            ann = self.annotations[self.selected_rect]
+            ann['class'] = self.pending_class_change
+            self.redraw_annotations()
+            self.update_stats()
         self.selected_rect = None
         self.resize_corner = None
+        self.pending_class_change = None
+        self.action_moved = False
 
     def delete_box(self, event):
         """Удаление прямоугольника правой кнопкой мыши"""
