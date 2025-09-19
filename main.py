@@ -29,6 +29,7 @@ class ImageLabeler:
         self.class_colors = {}
 
         # Список изображений
+        self.supported_extensions = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
         self.image_files = []
         self.current_image_index = 0
         self.current_image = None
@@ -97,7 +98,17 @@ class ImageLabeler:
             self.class_listbox.itemconfig(idx, fg=color)
 
         # Загрузка изображений
-        self.image_files = [f for f in self.image_path.glob("*.jpg") if f.is_file()]
+        if self.image_path.is_dir():
+            self.image_files = sorted(
+                (
+                    file
+                    for file in self.image_path.iterdir()
+                    if file.is_file() and file.suffix.lower() in self.supported_extensions
+                ),
+                key=lambda p: p.name.lower(),
+            )
+        else:
+            self.image_files = []
         self.current_image_index = 0
         self.annotations = []
         if self.image_files:
@@ -672,7 +683,7 @@ class ImageLabeler:
             for txt_file in src_dir.glob("*.txt"):
                 stem = txt_file.stem
                 image_file = None
-                for ext in [".jpg", ".jpeg", ".png"]:
+                for ext in self.supported_extensions:
                     candidate = src_dir / f"{stem}{ext}"
                     if candidate.exists():
                         image_file = candidate
