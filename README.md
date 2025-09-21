@@ -52,8 +52,6 @@ pip install ultralytics
 pip install numpy==1.26.4 opencv-python==4.8.0.76
 ```
 
-Сначала ставится корректный wheel PyTorch (с поддержкой CUDA), затем Ultralytics, потом фиксированные версии NumPy и OpenCV. Пакеты `albumentations` и `tqdm` используются для аугментаций и прогресс-баров.
-
 ## Запуск
 Из корня репозитория выполните:
 
