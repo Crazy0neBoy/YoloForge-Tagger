@@ -28,13 +28,31 @@ Tasks/
 Аннотации сохраняются в формате YOLO: `class_id x_center y_center width height` (нормированные значения). При наличии файла `best.pt` устройство выбирается автоматически: используется GPU, если доступен `torch.cuda`, иначе CPU.
 
 ## Установка
-1. Убедитесь, что установлен - Python 3.10 или новее.
-2. (Опционально) создайте виртуальное окружение:
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate  # Windows: .venv\Scripts\activate
-   ```
-3. Для работы графического интерфейса на Linux может понадобиться пакет `python3-tk` из системного менеджера пакетов.
+Рекомендуется использовать виртуальное окружение и Python 3.10. Пакеты следует устанавливать **строго в указанном порядке**.
+
+### Windows
+
+```bat
+python -m venv .venv
+.\.venv\Scripts\activate
+:: --- установка строго в этом порядке ---
+pip install torch==2.0.1 torchvision==0.15.2 --index-url https://download.pytorch.org/whl/cu118
+pip install ultralytics
+pip install numpy==1.26.4 opencv-python==4.8.0.76
+```
+
+### Linux / macOS
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+# --- установка строго в этом порядке ---
+pip install torch==2.0.1 torchvision==0.15.2 --index-url https://download.pytorch.org/whl/cu118
+pip install ultralytics
+pip install numpy==1.26.4 opencv-python==4.8.0.76
+```
+
+Сначала ставится корректный wheel PyTorch (с поддержкой CUDA), затем Ultralytics, потом фиксированные версии NumPy и OpenCV. Пакеты `albumentations` и `tqdm` используются для аугментаций и прогресс-баров.
 
 ## Запуск
 Из корня репозитория выполните:
